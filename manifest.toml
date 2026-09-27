@@ -1,0 +1,183 @@
+schema_version = 1
+plugin_name = "gcta"
+
+[image]
+reference = "ghcr.io/auto-nomics/autonomics/gcta@sha256:4cbf8c91376f7b314eebf1dfa02ad44028575991cd3d4c4e81b5324942bec20b"
+tag = "1.95.3"
+upstream = "official GCTA 1.95.3 Linux (2026-07-10) @ https://yanglab.westlake.edu.cn/software/gcta"
+license = "MIT"
+
+# The two family panels. Every [[nodes]] entry below compiles with both
+# bindings (v0 panel bindings are family-wide); the legacy wrapper attached
+# only the subset each analysis read (plink_ref for cojo_select/sblup,
+# plink_ref + gene_list for fastbat, gene_list for acat). The scripts read
+# the same /panels/... paths either way.
+[[panels]]
+binding = "plink_ref"
+mount = "/panels/plink_ref"
+bundle = "wjixiang/catalog-plink-ref-1000g-eur-binary"
+
+[[panels]]
+binding = "gene_list"
+mount = "/panels/gene_list"
+bundle = "wjixiang/catalog-gcta-gene-list-hg19"
+
+[[nodes]]
+kind = "gcta_cojo_select"
+desc = "Runs official GCTA-COJO stepwise selection."
+doc = """
+Runs official GCTA 1.95.3 `--cojo-slct` against the chromosome-split 1000G
+EUR Phase3 PLINK reference. Input is one GCTA-COJO `.ma` File with SNP, A1,
+A2, freq, b/BETA, se/SE, p and n/N columns. Emits the official JMA
+(stepwise-selected), LDR (LD), CMA (clumped) and log artifacts. GCTA
+recommends a GWAS-cohort or large participating-cohort reference where
+available; this binding is the recorded reproducible 1000G EUR fallback.
+"""
+timeout_secs = 3600
+artifact_prefix = "/artifacts/gcta_container"
+
+[nodes.ports]
+inputs = [{ type = "file" }]
+outputs = [
+  { path = "gcta_cojo.jma.cojo", format = "gcta_cojo_jma" },
+  { path = "gcta_cojo.ldr.cojo", format = "gcta_cojo_ldr" },
+  { path = "gcta_cojo.cma.cojo", format = "gcta_cojo_cma" },
+  { path = "gcta_cojo.log", format = "gcta_log" },
+]
+
+[nodes.params]
+chr = { type = "int", min = 1.0, max = 22.0, doc = "Chromosome analyzed; the bound PLINK reference is chromosome-split" }
+maf = { type = "number", default = 0.01, exclusive_min = 0.0, max = 0.5, doc = "Minor-allele-frequency filter" }
+cojo_p = { type = "number", default = 5e-8, exclusive_min = 0.0, max = 1.0, doc = "GWAS significance level for inclusion" }
+cojo_wind_kb = { type = "int", default = 10000, min = 1.0, doc = "COJO clumping window in kb" }
+cojo_collinear = { type = "number", default = 0.9, exclusive_min = 0.0, exclusive_max = 1.0, doc = "Collinearity threshold for stepwise selection" }
+diff_freq = { type = "number", default = 0.2, exclusive_min = 0.0, max = 1.0, doc = "Maximum allele-frequency difference against the reference" }
+thread_num = { type = "int", default = 1, min = 1.0, max = 1024.0, doc = "CPU thread count" }
+
+[nodes.command]
+interpreter = "sh"
+script_file = "scripts/cojo.sh"
+
+[nodes.command.env]
+GCTA_CHR = "{{ chr }}"
+GCTA_MAF = "{{ maf }}"
+GCTA_COJO_P = "{{ cojo_p }}"
+GCTA_COJO_WIND_KB = "{{ cojo_wind_kb }}"
+GCTA_COJO_COLLINEAR = "{{ cojo_collinear }}"
+GCTA_DIFF_FREQ = "{{ diff_freq }}"
+GCTA_THREAD_NUM = "{{ thread_num }}"
+
+[[nodes]]
+kind = "gcta_sblup"
+desc = "Runs official GCTA-COJO SBLUP prediction."
+doc = """
+Runs official GCTA 1.95.3 `--cojo-sblup` for one chromosome against the
+1000G EUR Phase3 PLINK reference. Input is one GCTA-COJO `.ma` File;
+lambda must be supplied from LDSC/GREML estimates or domain knowledge.
+Emits the official SBLUP SNP-effect table and the complete log. The window
+parameter keeps the legacy name `cojo_wind_kb` (its default here is 1000,
+distinct from cojo_select's 10000).
+"""
+timeout_secs = 3600
+artifact_prefix = "/artifacts/gcta_container"
+
+[nodes.ports]
+inputs = [{ type = "file" }]
+outputs = [
+  { path = "gcta_sblup.sblup.cojo", format = "gcta_sblup" },
+  { path = "gcta_sblup.log", format = "gcta_log" },
+]
+
+[nodes.params]
+chr = { type = "int", min = 1.0, max = 22.0, doc = "Chromosome analyzed; the bound PLINK reference is chromosome-split" }
+lambda = { type = "number", exclusive_min = 0.0, doc = "SBLUP tuning parameter from LDSC/GREML or domain knowledge" }
+maf = { type = "number", default = 0.01, exclusive_min = 0.0, max = 0.5, doc = "Minor-allele-frequency filter" }
+cojo_wind_kb = { type = "int", default = 1000, min = 1.0, doc = "SBLUP window size in kb (legacy param name kept)" }
+diff_freq = { type = "number", default = 0.2, exclusive_min = 0.0, max = 1.0, doc = "Maximum allele-frequency difference against the reference" }
+thread_num = { type = "int", default = 1, min = 1.0, max = 1024.0, doc = "CPU thread count" }
+
+[nodes.command]
+interpreter = "sh"
+script_file = "scripts/sblup.sh"
+
+[nodes.command.env]
+GCTA_CHR = "{{ chr }}"
+GCTA_LAMBDA = "{{ lambda }}"
+GCTA_MAF = "{{ maf }}"
+GCTA_COJO_WIND_KB = "{{ cojo_wind_kb }}"
+GCTA_DIFF_FREQ = "{{ diff_freq }}"
+GCTA_THREAD_NUM = "{{ thread_num }}"
+
+[[nodes]]
+kind = "gcta_fastbat"
+desc = "Runs official GCTA-fastBAT gene-based testing."
+doc = """
+Runs official GCTA-fastBAT 1.95.3 with the official GCTA hg19 gene list and
+the 1000G EUR Phase3 PLINK LD reference. Input is one GCTA-COJO `.ma` File;
+output is the official gene-level `.gene.fastbat` result plus the complete
+log. This is the only variant of the family that the legacy contract wired
+to both family panels.
+"""
+timeout_secs = 3600
+artifact_prefix = "/artifacts/gcta_container"
+
+[nodes.ports]
+inputs = [{ type = "file" }]
+outputs = [
+  { path = "gcta_fastbat.gene.fastbat", format = "gcta_fastbat" },
+  { path = "gcta_fastbat.log", format = "gcta_log" },
+]
+
+[nodes.params]
+chr = { type = "int", min = 1.0, max = 22.0, doc = "Chromosome analyzed; the bound PLINK reference is chromosome-split" }
+maf = { type = "number", default = 0.01, exclusive_min = 0.0, max = 0.5, doc = "Minor-allele-frequency filter" }
+gene_flank_kb = { type = "int", default = 50, min = 1.0, doc = "Gene boundary extension on each side, in kb" }
+ld_cutoff = { type = "number", default = 0.9, exclusive_min = 0.0, max = 1.0, doc = "LD r-squared cutoff for grouping lead SNPs" }
+diff_freq = { type = "number", default = 0.2, exclusive_min = 0.0, max = 1.0, doc = "Maximum allele-frequency difference against the reference" }
+thread_num = { type = "int", default = 1, min = 1.0, max = 1024.0, doc = "CPU thread count" }
+
+[nodes.command]
+interpreter = "sh"
+script_file = "scripts/fastbat.sh"
+
+[nodes.command.env]
+GCTA_CHR = "{{ chr }}"
+GCTA_MAF = "{{ maf }}"
+GCTA_GENE_FLANK_KB = "{{ gene_flank_kb }}"
+GCTA_LD_CUTOFF = "{{ ld_cutoff }}"
+GCTA_DIFF_FREQ = "{{ diff_freq }}"
+GCTA_THREAD_NUM = "{{ thread_num }}"
+
+[[nodes]]
+kind = "gcta_acat"
+desc = "Runs official GCTA ACAT-V rare-variant testing."
+doc = """
+Runs official GCTA ACAT-V 1.95.3. Input is one fastGWA File with CHR, SNP,
+POS, A1, A2, N, AF1, BETA, SE and P columns. The node binds the official
+GCTA hg19 gene list and requires no LD reference. Emits the official ACAT
+result and log. `gene_flank_kb` feeds `--wind`; the legacy default of 0
+means variants must fall inside the declared gene boundaries.
+"""
+timeout_secs = 3600
+artifact_prefix = "/artifacts/gcta_container"
+
+[nodes.ports]
+inputs = [{ type = "file" }]
+outputs = [
+  { path = "gcta_acat.acat", format = "gcta_acat" },
+  { path = "gcta_acat.log", format = "gcta_log" },
+]
+
+[nodes.params]
+max_maf = { type = "number", default = 0.01, exclusive_min = 0.0, max = 0.5, doc = "Maximum MAC-filtered variant MAF for ACAT-V" }
+min_mac = { type = "int", default = 20, min = 1.0, doc = "Minimum minor-allele count for a variant to be tested" }
+gene_flank_kb = { type = "int", default = 0, min = 0.0, doc = "Gene boundary extension for --wind, in kb; 0 keeps official gene boundaries" }
+
+[nodes.command]
+interpreter = "sh"
+script_file = "scripts/acat.sh"
+
+[nodes.command.env]
+GCTA_MAX_MAF = "{{ max_maf }}"
+GCTA_MIN_MAC = "{{ min_mac }}"
+GCTA_GENE_FLANK_KB = "{{ gene_flank_kb }}"
